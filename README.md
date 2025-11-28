@@ -1,6 +1,14 @@
 # gh gist-new
 
-A GitHub CLI extension that creates a new gist from a directory and sets up the local folder as a git working copy.
+A GitHub CLI extension that creates a new gist from a directory and sets up the local folder as a git clone. This allows you to convert a local folder into a cloned gist in one step.
+
+1. Create a directory with text files, e.g. markdown files.
+2. Run `gh gist-new .` to create a gist from the directory.
+
+You can also create a new gist and directory in one step:
+
+1. Run `gh gist-new my-gist`. A new gist will be created in a new directory named `my-gist`.
+2. `cd my-gist` and add files.
 
 ## Features
 

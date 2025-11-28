@@ -3,3 +3,6 @@
 
 # Copilot tracking
 .copilot-tracking/
+
+# Working folder for tests
+.test-output/

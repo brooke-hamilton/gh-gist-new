@@ -10,7 +10,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
@@ -39,24 +38,8 @@ type options struct {
 	verbose     bool
 }
 
-type stringFlag struct {
-	value string
-	set   bool
-}
-
-func (s *stringFlag) String() string {
-	return s.value
-}
-
-func (s *stringFlag) Set(v string) error {
-	s.value = v
-	s.set = true
-	return nil
-}
-
 type filePayload struct {
 	Name    string
-	Path    string
 	Content []byte
 }
 
@@ -147,43 +130,59 @@ func parseArgs(args []string) (options, error) {
 	fs.SetOutput(io.Discard)
 	fs.BoolVar(&opts.public, "public", false, "create a public gist")
 	fs.BoolVar(&opts.verbose, "verbose", false, "enable verbose logging")
-	var desc stringFlag
-	fs.Var(&desc, "description", "description for the gist")
-	fs.Var(&desc, "d", "description for the gist")
+	fs.StringVar(&opts.description, "description", "", "description for the gist")
+	fs.StringVar(&opts.description, "d", "", "description for the gist")
 	fs.Usage = func() {
 		fmt.Fprint(os.Stderr, usageText)
 	}
 
-	if err := fs.Parse(args); err != nil {
+	// Separate positional arguments from flags to allow flags after the name argument
+	var positional []string
+	var flagArgs []string
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--" {
+			positional = append(positional, args[i+1:]...)
+			break
+		}
+		if strings.HasPrefix(arg, "-") {
+			flagArgs = append(flagArgs, arg)
+			// Check if this flag expects a value (not a boolean flag)
+			if arg == "-d" || arg == "--description" || arg == "-description" {
+				if i+1 < len(args) {
+					i++
+					flagArgs = append(flagArgs, args[i])
+				}
+			}
+		} else {
+			positional = append(positional, arg)
+		}
+	}
+
+	if err := fs.Parse(flagArgs); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
-			fs.Usage()
+			fmt.Fprint(os.Stdout, usageText)
 			return opts, errHelpRequested
 		}
 		fs.Usage()
-		return opts, fmt.Errorf("failed to parse flags: %w", err)
+		return opts, fmt.Errorf("parsing flags: %w", err)
 	}
 
-	remaining := fs.Args()
-	if len(remaining) == 0 {
+	if len(positional) == 0 {
 		fs.Usage()
 		return opts, errors.New("missing required [name] argument")
 	}
-	if len(remaining) > 1 {
+	if len(positional) > 1 {
 		fs.Usage()
 		return opts, errors.New("only one [name] argument is supported")
 	}
-	name := strings.TrimSpace(remaining[0])
+	name := strings.TrimSpace(positional[0])
 	if err := validateName(name); err != nil {
 		fs.Usage()
 		return opts, err
 	}
 	opts.name = name
-	if desc.set {
-		opts.description = strings.TrimSpace(desc.value)
-		if opts.description == "" {
-			return opts, errors.New("description cannot be empty when provided")
-		}
-	}
+	opts.description = strings.TrimSpace(opts.description)
 	return opts, nil
 }
 
@@ -209,13 +208,13 @@ func validateName(name string) error {
 func resolveTargetDirectory(name string) (string, string, error) {
 	cwd, err := os.Getwd()
 	if err != nil {
-		return "", "", fmt.Errorf("determine working directory: %w", err)
+		return "", "", fmt.Errorf("determining working directory: %w", err)
 	}
 
 	if name == "." {
 		abs, err := filepath.Abs(cwd)
 		if err != nil {
-			return "", "", fmt.Errorf("resolve current directory: %w", err)
+			return "", "", fmt.Errorf("resolving current directory: %w", err)
 		}
 		display := filepath.Base(abs)
 		if display == "." || display == string(filepath.Separator) || display == "" {
@@ -236,7 +235,7 @@ func resolveTargetDirectory(name string) (string, string, error) {
 	}
 	abs, err := filepath.Abs(target)
 	if err != nil {
-		return "", "", fmt.Errorf("resolve directory path: %w", err)
+		return "", "", fmt.Errorf("resolving directory path: %w", err)
 	}
 	if err := ensureWritable(abs); err != nil {
 		return "", "", err
@@ -251,12 +250,12 @@ func ensureDirectoryExists(path string) error {
 	info, err := os.Stat(path)
 	if errors.Is(err, os.ErrNotExist) {
 		if err := os.MkdirAll(path, 0o755); err != nil {
-			return fmt.Errorf("create directory %s: %w", path, err)
+			return fmt.Errorf("creating directory %s: %w", path, err)
 		}
 		return nil
 	}
 	if err != nil {
-		return fmt.Errorf("inspect directory %s: %w", path, err)
+		return fmt.Errorf("inspecting directory %s: %w", path, err)
 	}
 	if !info.IsDir() {
 		return fmt.Errorf("%s exists but is not a directory", path)
@@ -288,16 +287,14 @@ func ensureNotGitRepo(dir string) error {
 func gatherFiles(dir, displayName string, log logger) ([]filePayload, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return nil, fmt.Errorf("read directory %s: %w", dir, err)
+		return nil, fmt.Errorf("reading directory %s: %w", dir, err)
 	}
-	sort.Slice(entries, func(i, j int) bool {
-		return entries[i].Name() < entries[j].Name()
-	})
+	// entries are already sorted by name per os.ReadDir documentation
 	var files []filePayload
 	for _, entry := range entries {
 		info, err := entry.Info()
 		if err != nil {
-			return nil, fmt.Errorf("inspect %s: %w", entry.Name(), err)
+			return nil, fmt.Errorf("inspecting %s: %w", entry.Name(), err)
 		}
 		if entry.Type()&os.ModeSymlink != 0 && info.IsDir() {
 			return nil, fmt.Errorf("symlink %s targets a directory; gists cannot include directories", entry.Name())
@@ -316,9 +313,9 @@ func gatherFiles(dir, displayName string, log logger) ([]filePayload, error) {
 		path := filepath.Join(dir, entry.Name())
 		content, err := os.ReadFile(path)
 		if err != nil {
-			return nil, fmt.Errorf("read %s: %w", entry.Name(), err)
+			return nil, fmt.Errorf("reading %s: %w", entry.Name(), err)
 		}
-		files = append(files, filePayload{Name: entry.Name(), Path: path, Content: content})
+		files = append(files, filePayload{Name: entry.Name(), Content: content})
 		log.Verbose("Queued %s (%d bytes)", entry.Name(), len(content))
 	}
 	if len(files) == 0 {
@@ -326,9 +323,9 @@ func gatherFiles(dir, displayName string, log logger) ([]filePayload, error) {
 		content := []byte(fmt.Sprintf("# %s\n", displayName))
 		path := filepath.Join(dir, name)
 		if err := os.WriteFile(path, content, 0o644); err != nil {
-			return nil, fmt.Errorf("bootstrap default file %s: %w", name, err)
+			return nil, fmt.Errorf("bootstrapping default file %s: %w", name, err)
 		}
-		files = append(files, filePayload{Name: name, Path: path, Content: content})
+		files = append(files, filePayload{Name: name, Content: content})
 		log.Info("Directory was empty; created %s", name)
 	}
 	return files, nil
@@ -351,15 +348,15 @@ func createGist(files []filePayload, opts options, log logger) (string, string, 
 	}
 	client, err := api.DefaultRESTClient()
 	if err != nil {
-		return "", "", fmt.Errorf("init GitHub client: %w", err)
+		return "", "", fmt.Errorf("initializing GitHub client: %w", err)
 	}
 	payload, err := json.Marshal(req)
 	if err != nil {
-		return "", "", fmt.Errorf("encode gist payload: %w", err)
+		return "", "", fmt.Errorf("encoding gist payload: %w", err)
 	}
 	var resp gistCreateResponse
 	if err := client.Post("gists", bytes.NewReader(payload), &resp); err != nil {
-		return "", "", fmt.Errorf("create gist via GitHub API: %w", err)
+		return "", "", fmt.Errorf("creating gist via GitHub API: %w", err)
 	}
 	if resp.ID == "" || resp.HTMLURL == "" {
 		return "", "", errors.New("GitHub API returned an incomplete gist response")
@@ -375,7 +372,7 @@ func createGist(files []filePayload, opts options, log logger) (string, string, 
 func cloneGistMetadata(gistID, targetDir string, log logger) error {
 	tempParent, err := os.MkdirTemp("", "gh-gist-new-")
 	if err != nil {
-		return fmt.Errorf("create temporary directory for cloning: %w", err)
+		return fmt.Errorf("creating temporary directory for cloning: %w", err)
 	}
 	defer os.RemoveAll(tempParent)
 
@@ -411,7 +408,7 @@ func cloneGistMetadata(gistID, targetDir string, log logger) error {
 func moveGitMetadata(from, to string) error {
 	entries, err := os.ReadDir(from)
 	if err != nil {
-		return fmt.Errorf("inspect cloned gist: %w", err)
+		return fmt.Errorf("inspecting cloned gist: %w", err)
 	}
 	movedGitDir := false
 	for _, entry := range entries {
@@ -424,11 +421,11 @@ func moveGitMetadata(from, to string) error {
 		}
 		src := filepath.Join(from, name)
 		dst := filepath.Join(to, name)
-		if err := os.RemoveAll(dst); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("prepare destination %s: %w", dst, err)
+		if err := os.RemoveAll(dst); err != nil {
+			return fmt.Errorf("preparing destination %s: %w", dst, err)
 		}
 		if err := moveFileOrDir(src, dst); err != nil {
-			return fmt.Errorf("move %s into target directory: %w", name, err)
+			return fmt.Errorf("moving %s into target directory: %w", name, err)
 		}
 		if name == ".git" {
 			movedGitDir = true
@@ -442,23 +439,27 @@ func moveGitMetadata(from, to string) error {
 
 // moveFileOrDir moves a file or directory from src to dst.
 // It first attempts os.Rename, and falls back to a copy-then-delete
-// approach if the rename fails due to a cross-device link error.
+// approach if the rename fails (e.g., cross-device link on Unix,
+// or similar restrictions on Windows).
 func moveFileOrDir(src, dst string) error {
 	err := os.Rename(src, dst)
 	if err == nil {
 		return nil
 	}
-	// Check for cross-device link error (EXDEV)
+	// os.Rename fails across filesystems/devices. Fall back to copy + delete.
+	// On Unix this is EXDEV; on Windows it can happen across drives.
+	// Rather than checking platform-specific errors, just attempt the fallback
+	// for any rename failure involving a link error.
 	var linkErr *os.LinkError
 	if !errors.As(err, &linkErr) {
 		return err
 	}
-	// Fall back to copy + delete for cross-device moves
+	// Fall back to copy + delete
 	if err := copyDir(src, dst); err != nil {
-		return fmt.Errorf("copy: %w", err)
+		return fmt.Errorf("copying: %w", err)
 	}
 	if err := os.RemoveAll(src); err != nil {
-		return fmt.Errorf("remove source after copy: %w", err)
+		return fmt.Errorf("removing source after copy: %w", err)
 	}
 	return nil
 }
