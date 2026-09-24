@@ -1,6 +1,9 @@
 /gh-gist-new
 /gh-gist-new.exe
 
+# Editor settings
+.vscode/
+
 # Copilot tracking
 .copilot-tracking/
 
