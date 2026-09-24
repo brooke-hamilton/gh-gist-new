@@ -1,6 +1,6 @@
 module github.com/brooke-hamilton/gh-gist-new
 
-go 1.25.4
+go 1.27.1
 
 require github.com/cli/go-gh/v2 v2.16.1
 
